@@ -21,12 +21,15 @@ epochs = 10
 
 class DataLoader():
     def __init__(self, split=0.7):
-        self.image_data = self.init_Image(2)
-        self.label_data = self.init_Label(3)
-        self.train_Image = self.image_data[0:int(split*60000), :]
-        self.validation_Image = self.image_data[int(split * 60000): 60000]
-        self.train_label = self.image_data[0:int(split*60000), :]
-        self.validation_label = self.label_data[int(split * 60000): 60000]
+        image_data = self.init_Image(2)
+        label_data = self.init_Label(3)
+        self.train_Image = image_data[0:int(split*60000), :]
+        self.validation_Image = image_data[int(split * 60000): 60000]
+        self.train_label = label_data[0:int(split*60000)]
+        self.validation_label = label_data[int(split * 60000): 60000]
+
+        self.train_Image = self.train_Image.astype(float) / 255
+        self.validation_Image = self.validation_Image.astype(float) / 255
 
     def init_Image(self, index):
         fp = path + file_list[index]
@@ -56,6 +59,15 @@ class DataLoader():
         self.label_data = label
         return label
 
+    def get_minibatch(self, batch_size=BATCH_SIZE, shuffle=False):
+        if shuffle == True:
+            pass
+
+        for start in range(0, len(self.train_Image), batch_size):
+            batch_image = self.train_Image[start:start+batch_size, ]
+            batch_label = self.train_label[start:start+batch_size, ]
+            yield batch_image, batch_label
+
 
 class nn_module():
     def __init__(self):
@@ -70,15 +82,16 @@ class nn_module():
 
 def Cross_Entropy(y, y_predict):
     # -(sigma(target * log(predict))) / size
-    cross_entropy = -np.sum(y * np.log(y_predict)) / y_predict.shape[0]
+    cross_entropy = [y_predict[i][y[i]] for i in range(len(y_predict))]
+    cross_entropy = np.asarray(cross_entropy)
+    cross_entropy = -np.log(cross_entropy)
     return cross_entropy
 
 
-def Softmax(y):
-  # e^z(index)/sum of(all e^z(index))
-    exp = [np.exp(i) for i in y]
-    sum_exp = sum(exp)
-    softmax = [j / sum_exp for j in exp]
+def Softmax(logits):
+    exps = [np.exp(i) for i in logits]
+    sum_of_exps = sum(exps)
+    softmax = [j / sum_of_exps for j in exps]
     return softmax
 
 
@@ -89,8 +102,8 @@ class ReLU():
     def forward(self, input):
         return np.maximum(input, 0)
 
-    def backward(self, input):
-        pass
+    def backward(self, input, grad_output):
+        return grad_output*input if input > 0 else 0
 
 
 class Dense():
@@ -104,9 +117,8 @@ class Dense():
                                        size=(self.input, self.output))
         self.biases = np.zeros(output)
 
-    def forward(self):
-        return np.dots()
-        pass
+    def forward(self, input):
+        return np.dot(input, self.weight) + self.biases
 
     def backward(self):
         pass
@@ -121,13 +133,21 @@ class Model():
         # model.append(ReLU())
         self.model = model
 
-    def forward(self, intput):
+    def forward(self, input, y):
         activations = []
         x = input
         for layer in self.model:
             activations.append(layer.forward(x))
             x = activations[-1]
+        activations = [input] + activations
         return activations
+
+    def backward(self, loss_grad, layer_inputs):
+        for layer_index in range(len(self.model))[::-1]:
+            loss_grad = self.model[layer_index].backward(
+                layer_inputs[layer_index], loss_grad)
+
+        return np.mean(loss_grad)
 
 
 def main():
@@ -137,23 +157,22 @@ def main():
     print("train_label shape : ", dataLoader.train_label.shape)
     print("validation_label shape : ", dataLoader.validation_label.shape)
 
-    train_Image = dataLoader.train_Image
-    validation_Image = dataLoader.validation_Image
-    train_label = dataLoader.train_label
-    validation_label = dataLoader.validation_label
-
+    # train_Image = dataLoader.train_Image
+    # validation_Image = dataLoader.validation_Image
+    # train_label = dataLoader.train_label
+    # validation_label = dataLoader.validation_label
     print("training start \n")
-
+    model = Model(dataLoader.train_Image.shape[1])
     for i in range(epochs):
         print("epoch", i+1, "/", epochs)
-        for i in range(train_Image.shape[0]):
-            x = train_Image[i]
-            y = train_label[i]
-            model = Model(x.shape[1])
-            activatons = model.forward(x)
-            layer_inputs = [x] + activations
+        for train_image_batch, train_label_batch in dataLoader.get_minibatch():
+            activations = model.forward(train_image_batch, train_label_batch)
             logits = activations[-1]
-            loss = Cross_Entropy(logits, y)
+            softmax = Softmax(logits)
+            loss = Cross_Entropy(train_label_batch, softmax)
+            loss_grad = 0
+
+            total_loss = model.backward(loss_grad, activations)
 
 
 if __name__ == '__main__':
