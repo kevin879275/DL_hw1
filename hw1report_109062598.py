@@ -14,8 +14,8 @@ file_list = [
 ]
 
 path = "./MNIST/"
-BATCH_SIZE = 6
-lr = 0.0001
+BATCH_SIZE = 32
+lr = 0.1
 epochs = 10
 
 
@@ -59,25 +59,15 @@ class DataLoader():
         self.label_data = label
         return label
 
-    def get_minibatch(self, batch_size=BATCH_SIZE, shuffle=False):
-        if shuffle == True:
-            pass
-
+    def get_minibatch(self, batch_size=BATCH_SIZE, shuffle=True):
+        if shuffle:
+            indices = np.random.permutation(self.train_Image.shape[0])
         for start in range(0, len(self.train_Image), batch_size):
-            batch_image = self.train_Image[start:start+batch_size, ]
-            batch_label = self.train_label[start:start+batch_size, ]
-            yield batch_image, batch_label
-
-
-class nn_module():
-    def __init__(self):
-        pass
-
-    def forward(self):
-        pass
-
-    def backward(self):
-        pass
+            if shuffle:
+                excerpt = indices[start:start + batch_size]
+            else:
+                excerpt = slice(start, start + batch_size)
+            yield self.train_Image[excerpt], self.train_label[excerpt]
 
 
 def Cross_Entropy(y, y_predict):
@@ -88,11 +78,28 @@ def Cross_Entropy(y, y_predict):
     return cross_entropy
 
 
+def Grad_Cross_Entropy(y, y_predict):
+    reference = np.zeros_like(y_predict)
+    reference[np.arange(y.shape[0]), y] = 1
+    softmax = np.exp(y_predict)/np.sum(np.exp(y_predict),
+                                       axis=-1, keepdims=True)
+    return (-reference + softmax) / y_predict.shape[0]
+
+
 def Softmax(logits):
     exps = [np.exp(i) for i in logits]
     sum_of_exps = sum(exps)
     softmax = [j / sum_of_exps for j in exps]
     return softmax
+
+
+def softmax_crossentropy_with_logits(logits, reference_answers):
+    # Compute crossentropy from logits[batch,n_classes] and ids of correct answers
+    logits_for_answers = logits[np.arange(len(logits)), reference_answers]
+
+    xentropy = - logits_for_answers + np.log(np.sum(np.exp(logits), axis=-1))
+
+    return xentropy
 
 
 class ReLU():
@@ -103,7 +110,8 @@ class ReLU():
         return np.maximum(input, 0)
 
     def backward(self, input, grad_output):
-        return grad_output*input if input > 0 else 0
+        relu_grad = input > 0
+        return grad_output*relu_grad
 
 
 class Dense():
@@ -120,20 +128,27 @@ class Dense():
     def forward(self, input):
         return np.dot(input, self.weight) + self.biases
 
-    def backward(self):
-        pass
+    def backward(self, input, grad_input):
+        grad_output = np.dot(grad_input, (self.weight).T)
+        # (d z / d w) * ( d C / d z) = ( d C / d w)
+        grad_weights = np.dot(input.T, grad_input)
+        grad_biases = grad_input.mean(axis=0)
+        self.weight = self.weight - self.lr * grad_weights
+        self.biases = self.biases - self.lr * grad_biases
+        return grad_output
 
 
 class Model():
     def __init__(self, input_shape):
         model = []
-        model.append(Dense(input_shape, 10))
+        model.append(Dense(input_shape, 100))
         model.append(ReLU())
-        #model.append(Dense(200, 10))
-        # model.append(ReLU())
+        model.append(Dense(100, 200))
+        model.append(ReLU())
+        model.append(Dense(200, 10))
         self.model = model
 
-    def forward(self, input, y):
+    def forward(self, input):
         activations = []
         x = input
         for layer in self.model:
@@ -150,6 +165,20 @@ class Model():
         return np.mean(loss_grad)
 
 
+def predict(train_label, predict_label):
+    correct = 0
+    for i in range(len(predict_label)):
+        if(train_label[i] == np.argmax(predict_label[i])):
+            correct = correct + 1
+    return correct
+
+
+def predict_(network, X):
+    # Compute network predictions. Returning indices of largest Logit probability
+    logits = network.forward(X)[-1]
+    return logits.argmax(axis=-1)
+
+
 def main():
     dataLoader = DataLoader()
     print("train_Image shape : ", dataLoader.train_Image.shape)
@@ -163,16 +192,34 @@ def main():
     # validation_label = dataLoader.validation_label
     print("training start \n")
     model = Model(dataLoader.train_Image.shape[1])
+    train_loss = []
+    train_log = []
+    val_log = []
     for i in range(epochs):
         print("epoch", i+1, "/", epochs)
+        batch = 0
+        loss = 0
+        acc = 0
         for train_image_batch, train_label_batch in dataLoader.get_minibatch():
-            activations = model.forward(train_image_batch, train_label_batch)
+            batch = batch + 1
+            activations = model.forward(train_image_batch)
             logits = activations[-1]
             softmax = Softmax(logits)
-            loss = Cross_Entropy(train_label_batch, softmax)
-            loss_grad = 0
-
-            total_loss = model.backward(loss_grad, activations)
+            loss += sum(Cross_Entropy(logits, train_label_batch)) / BATCH_SIZE
+            loss_grad = Grad_Cross_Entropy(train_label_batch, logits)
+            grad_loss = model.backward(loss_grad, activations)
+            # acc += predict(train_label_batch, softmax)
+            # if(batch % 40 == 0):
+            #     print("Batch : ", batch * BATCH_SIZE, "/",
+            #           dataLoader.train_Image.shape[0], "  : loss = ", loss / batch, " : acc = ", (acc * 100) / (batch * BATCH_SIZE), " % ")
+        train_log.append(loss/batch)
+        print("Train loss:", train_log[-1])
+        train_log.append(
+            np.mean(predict_(model, dataLoader.train_Image) == dataLoader.train_label))
+        val_log.append(
+            np.mean(predict_(model, dataLoader.validation_Image) == dataLoader.validation_label))
+        print("Train accuracy:", train_log[-1])
+        print("Val accuracy:", val_log[-1])
 
 
 if __name__ == '__main__':
