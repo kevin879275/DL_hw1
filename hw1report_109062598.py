@@ -23,6 +23,8 @@ class DataLoader():
     def __init__(self, split=0.7):
         image_data = self.init_Image(2)
         label_data = self.init_Label(3)
+        self.test_image_data = self.init_Image(0)
+        self.test_label_data = self.init_Label(1, False)
         self.train_Image = image_data[0:int(split*60000), :]
         self.validation_Image = image_data[int(split * 60000): 60000]
         self.train_label = label_data[0:int(split*60000)]
@@ -30,32 +32,36 @@ class DataLoader():
 
         self.train_Image = self.train_Image.astype(float) / 255
         self.validation_Image = self.validation_Image.astype(float) / 255
+        self.test_image_data = self.test_image_data.astype(float) / 255
 
     def init_Image(self, index):
         fp = path + file_list[index]
         File = open(fp, 'rb')
         raw_header = File.read(16)
         image_header_data = struct.unpack(">4I", raw_header)
-        #print("image header data : ", image_header_data)
+        # print("image header data : ", image_header_data)
         list_img = []
         for i in range(image_header_data[1]):
             img = File.read(28*28)
             image_data = struct.unpack(">784B", img)
             list_img.append(image_data)
         image = np.asarray(list_img)
-        #print("image shape = ", image.shape)
+        # print("image shape = ", image.shape)
         return image
 
-    def init_Label(self, index):
+    def init_Label(self, index, is_Train=True):
         fp = path + file_list[index]
         File = open(fp, 'rb')
         raw_header = File.read(8)
-        #label_header_data = struct.unpack(">2I", raw_header)
-        #print("label_header_data : ", label_header_data)
+        # label_header_data = struct.unpack(">2I", raw_header)
+        # print("label_header_data : ", label_header_data)
         lab = File.read(60000)
-        label_data = struct.unpack(">60000B", lab)
+        if(is_Train):
+            label_data = struct.unpack(">60000B", lab)
+        else:
+            label_data = struct.unpack(">10000B", lab)
         label = np.asarray(label_data)
-        #print("label shape = ", label.shape)
+        # print("label shape = ", label.shape)
         self.label_data = label
         return label
 
@@ -74,8 +80,8 @@ def Cross_Entropy(y, y_predict):
     # -(sigma(target * log(predict))) / size
     cross_entropy = [y_predict[i][y[i]] for i in range(len(y_predict))]
     cross_entropy = np.asarray(cross_entropy)
-    cross_entropy = -np.log(cross_entropy)
-    return cross_entropy
+    x_cross_entropy = -np.log(cross_entropy)
+    return x_cross_entropy
 
 
 def Grad_Cross_Entropy(y, y_predict):
@@ -83,7 +89,8 @@ def Grad_Cross_Entropy(y, y_predict):
     reference[np.arange(y.shape[0]), y] = 1
     softmax = np.exp(y_predict)/np.sum(np.exp(y_predict),
                                        axis=-1, keepdims=True)
-    return (-reference + softmax) / y_predict.shape[0]
+    # return (-reference + softmax) / y_predict.shape[0]
+    return (-softmax) / y_predict.shape[0]
 
 
 def Softmax(logits):
@@ -199,13 +206,14 @@ def main():
         print("epoch", i+1, "/", epochs)
         batch = 0
         loss = 0
-        acc = 0
         for train_image_batch, train_label_batch in dataLoader.get_minibatch():
             batch = batch + 1
             activations = model.forward(train_image_batch)
             logits = activations[-1]
             softmax = Softmax(logits)
-            loss += sum(Cross_Entropy(logits, train_label_batch)) / BATCH_SIZE
+            loss += sum(Cross_Entropy(train_label_batch, softmax)) / BATCH_SIZE
+            # loss += sum(softmax_crossentropy_with_logits(logits,
+            #                                              train_label_batch)) / BATCH_SIZE
             loss_grad = Grad_Cross_Entropy(train_label_batch, logits)
             grad_loss = model.backward(loss_grad, activations)
             # acc += predict(train_label_batch, softmax)
@@ -220,6 +228,13 @@ def main():
             np.mean(predict_(model, dataLoader.validation_Image) == dataLoader.validation_label))
         print("Train accuracy:", train_log[-1])
         print("Val accuracy:", val_log[-1])
+
+        print("----------------Test start ------------")
+    test_log = []
+    test_log.append(
+        np.mean(predict_(model, dataLoader.test_image_data) == dataLoader.test_label_data))
+
+    print("Test accuracy:", test_log[-1])
 
 
 if __name__ == '__main__':
