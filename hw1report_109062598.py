@@ -7,15 +7,15 @@ import math
 
 
 file_list = [
-    "t10k-images.idx3-ubyte",
-    "t10k-labels.idx1-ubyte",
-    "train-images.idx3-ubyte",
-    "train-labels.idx1-ubyte",
+    "t10k-images-idx3-ubyte",
+    "t10k-labels-idx1-ubyte",
+    "train-images-idx3-ubyte",
+    "train-labels-idx1-ubyte",
 ]
 
 path = "./MNIST/"
-BATCH_SIZE = 32
-lr = 0.1
+BATCH_SIZE = 64
+lr = 0.01
 epochs = 10
 
 
@@ -78,10 +78,14 @@ class DataLoader():
 
 def Cross_Entropy(y, y_predict):
     # -(sigma(target * log(predict))) / size
-    cross_entropy = [y_predict[i][y[i]] for i in range(len(y_predict))]
-    cross_entropy = np.asarray(cross_entropy)
-    x_cross_entropy = -np.log(cross_entropy)
-    return x_cross_entropy
+    # y_predict.shape = (batch_size , num_of_classes)
+    # y.shape = (batch_size, )
+    reference = np.zeros_like(y_predict)
+    reference[np.arange(y_predict.shape[0]), y] = 1
+    mul = np.multiply(reference, np.log(y_predict))
+    Sum = np.sum(mul)
+    loss = - (1 / BATCH_SIZE) * Sum
+    return loss
 
 
 def Grad_Cross_Entropy(y, y_predict):
@@ -89,24 +93,15 @@ def Grad_Cross_Entropy(y, y_predict):
     reference[np.arange(y.shape[0]), y] = 1
     softmax = np.exp(y_predict)/np.sum(np.exp(y_predict),
                                        axis=-1, keepdims=True)
-    # return (-reference + softmax) / y_predict.shape[0]
-    return (-softmax) / y_predict.shape[0]
+    return (-reference + softmax) / y_predict.shape[0]
+    # return (-softmax) / y_predict.shape[0]
 
 
 def Softmax(logits):
-    exps = [np.exp(i) for i in logits]
-    sum_of_exps = sum(exps)
-    softmax = [j / sum_of_exps for j in exps]
-    return softmax
-
-
-def softmax_crossentropy_with_logits(logits, reference_answers):
-    # Compute crossentropy from logits[batch,n_classes] and ids of correct answers
-    logits_for_answers = logits[np.arange(len(logits)), reference_answers]
-
-    xentropy = - logits_for_answers + np.log(np.sum(np.exp(logits), axis=-1))
-
-    return xentropy
+    exps = np.exp(logits)
+    sum_of_exps = np.sum(exps, axis=1)
+    softmax = [exps[i] / sum_of_exps[i] for i in range(sum_of_exps.shape[0])]
+    return np.asarray(softmax)
 
 
 class ReLU():
@@ -172,18 +167,15 @@ class Model():
         return np.mean(loss_grad)
 
 
-def predict(train_label, predict_label):
-    correct = 0
-    for i in range(len(predict_label)):
-        if(train_label[i] == np.argmax(predict_label[i])):
-            correct = correct + 1
-    return correct
-
-
-def predict_(network, X):
+def predict_(network, X, Y, is_Test=True):
     # Compute network predictions. Returning indices of largest Logit probability
     logits = network.forward(X)[-1]
-    return logits.argmax(axis=-1)
+    if(is_Test == True):
+        return np.mean(logits.argmax(axis=-1) == Y)
+    else:
+        softmax = Softmax(logits)
+        loss = Cross_Entropy(Y, softmax)
+        return np.mean(logits.argmax(axis=-1) == Y), loss
 
 
 def main():
@@ -193,15 +185,13 @@ def main():
     print("train_label shape : ", dataLoader.train_label.shape)
     print("validation_label shape : ", dataLoader.validation_label.shape)
 
-    # train_Image = dataLoader.train_Image
-    # validation_Image = dataLoader.validation_Image
-    # train_label = dataLoader.train_label
-    # validation_label = dataLoader.validation_label
     print("training start \n")
     model = Model(dataLoader.train_Image.shape[1])
     train_loss = []
+    val_loss_list = []
     train_log = []
     val_log = []
+    print(model.model)
     for i in range(epochs):
         print("epoch", i+1, "/", epochs)
         batch = 0
@@ -211,29 +201,36 @@ def main():
             activations = model.forward(train_image_batch)
             logits = activations[-1]
             softmax = Softmax(logits)
-            loss += sum(Cross_Entropy(train_label_batch, softmax)) / BATCH_SIZE
-            # loss += sum(softmax_crossentropy_with_logits(logits,
-            #                                              train_label_batch)) / BATCH_SIZE
+            loss += Cross_Entropy(train_label_batch, softmax)
             loss_grad = Grad_Cross_Entropy(train_label_batch, logits)
-            grad_loss = model.backward(loss_grad, activations)
-            # acc += predict(train_label_batch, softmax)
-            # if(batch % 40 == 0):
-            #     print("Batch : ", batch * BATCH_SIZE, "/",
-            #           dataLoader.train_Image.shape[0], "  : loss = ", loss / batch, " : acc = ", (acc * 100) / (batch * BATCH_SIZE), " % ")
-        train_log.append(loss/batch)
-        print("Train loss:", train_log[-1])
+            loss_grad = model.backward(loss_grad, activations)
+        train_loss.append(loss/batch)
+        print("Train loss:", train_loss[-1])
         train_log.append(
-            np.mean(predict_(model, dataLoader.train_Image) == dataLoader.train_label))
-        val_log.append(
-            np.mean(predict_(model, dataLoader.validation_Image) == dataLoader.validation_label))
+            predict_(model, dataLoader.train_Image, dataLoader.train_label))
+        val_pre, val_loss = predict_(
+            model, dataLoader.validation_Image, dataLoader.validation_label, False)
+        val_log.append(val_pre)
+        val_loss_list.append(val_loss)
+        print("Val loss:", val_loss)
         print("Train accuracy:", train_log[-1])
         print("Val accuracy:", val_log[-1])
 
-        print("----------------Test start ------------")
+    print("----------------Test start ------------")
     test_log = []
     test_log.append(
-        np.mean(predict_(model, dataLoader.test_image_data) == dataLoader.test_label_data))
-
+        predict_(model, dataLoader.test_image_data, dataLoader.test_label_data))
+    # plt.figure()
+    list_epochs = [i + 1 for i in range(epochs)]
+    plt.subplot(211)
+    plt.plot(list_epochs, train_loss)
+    plt.xlabel("epoch")
+    plt.ylabel("Train_loss")
+    plt.subplot(212)
+    plt.plot(list_epochs, val_loss_list)
+    plt.xlabel("epoch")
+    plt.ylabel("Val_loss")
+    plt.show()
     print("Test accuracy:", test_log[-1])
 
 
